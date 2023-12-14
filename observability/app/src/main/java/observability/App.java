@@ -10,20 +10,6 @@ public class App {
 
 	public static void main(String[] args) {
 		System.out.println(new App().getGreeting());
-		MetricExporter metricExporter = new MetricExporter();
-		metricExporter.startMetricServer(9808);
-		// test metrics
-		new Thread(() -> {
-			while(true) {
-				metricExporter.count("count_test");
-				try {
-					Thread.sleep(1000);
-				} catch (InterruptedException e) {
-					throw new RuntimeException(e);
-				}
-			}
-
-		}).start();
 
 		new BioSocketServer().run();
 	}

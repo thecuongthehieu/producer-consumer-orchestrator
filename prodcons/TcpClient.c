@@ -17,23 +17,15 @@
    then printed. */
 int main(int argc, char **argv)
 {
-    char hostname[100];
-    char *answer;
+    const char *hostname = "127.0.0.1";
+    int port = 6873;
+
     int sd;
-    int port;
     int stopped = FALSE;
     int len;
-    unsigned int netLen;
+
     struct sockaddr_in sin;
     struct hostent *hp;
-    /* Check number of arguments and get IP address and port */
-    if (argc < 3)
-    {
-        printf("Usage: client <hostname> <port>\n");
-        exit(0);
-    }
-    sscanf(argv[1], "%s", hostname);
-    sscanf(argv[2], "%d", &port);
 
     /* Resolve the passed name and store the resulting long representation
        in the struct hostent variable */

@@ -6,7 +6,12 @@
 #include <semaphore.h>
 #include <unistd.h>
 
-#define MAX_PROCESSES 256
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <netdb.h>
+#include <string.h>
+
 #define BUFFER_SIZE 128
 /* Shared Buffer, indexes and semaphores are held in shared memory
    readIdx is the index in the buffer of the next item to be retrieved
@@ -19,6 +24,8 @@
    dataAvailableSem is used to wait for data avilability
    roomAvailableSem is used to wait for room abailable in the buffer */
 
+#define PAUSE sleep(2);
+
 struct BufferData
 {
     int readIdx;
@@ -27,6 +34,11 @@ struct BufferData
     sem_t mutexSem;
     sem_t dataAvailableSem;
     sem_t roomAvailableSem;
+
+    // Metrics
+    int read_count;
+    int write_count;
+    int queue_size;
 };
 
 struct BufferData *sharedBuf;
@@ -45,15 +57,23 @@ static void consumer()
         item = sharedBuf->buffer[sharedBuf->readIdx];
         /* Update read index */
         sharedBuf->readIdx = (sharedBuf->readIdx + 1) % BUFFER_SIZE;
+
+        sharedBuf->read_count += 1;
+        sharedBuf->queue_size -= 1;
+
         /* Signal that a new empty slot is available */
         sem_post(&sharedBuf->roomAvailableSem);
         /* Exit critical section */
         sem_post(&sharedBuf->mutexSem);
         /* Consume data item and take actions (e.g return)*/
         // ...
+
+        PAUSE
+        PAUSE
     }
 }
-/* producer routine */
+
+/* Producer routine */
 static void producer()
 {
     int item = 0;
@@ -69,25 +89,29 @@ static void producer()
         sharedBuf->buffer[sharedBuf->writeIdx] = item;
         /* Update write index */
         sharedBuf->writeIdx = (sharedBuf->writeIdx + 1) % BUFFER_SIZE;
+
+        sharedBuf->write_count += 1;
+        sharedBuf->queue_size += 1;
+
         /* Signal that a new data slot is available */
         sem_post(&sharedBuf->dataAvailableSem);
         /* Exit critical section */
         sem_post(&sharedBuf->mutexSem);
+
+        PAUSE
     }
 }
-/* Main program: the passed argument specifies the number
-   of consumers */
+
+/* Main program */
 int main(int argc, char *args[])
 {
+    ///////////////////////////////////
+    // Setup shared mem
+    ///////////////////////////////////
+
     int memId;
-    int i, nConsumers;
-    pid_t pids[MAX_PROCESSES];
-    if (argc != 2)
-    {
-        printf("Usage: prodcons  <numProcesses>\n");
-        exit(0);
-    }
-    sscanf(args[1], "%d", &nConsumers);
+    int i;
+    
     /* Set-up shared memory */
     memId = shmget(IPC_PRIVATE, sizeof(struct BufferData), SHM_R | SHM_W);
     if (memId == -1)
@@ -104,6 +128,12 @@ int main(int argc, char *args[])
     /* Initialize buffer indexes */
     sharedBuf->readIdx = 0;
     sharedBuf->writeIdx = 0;
+
+    
+    sharedBuf->read_count = 0;
+    sharedBuf->write_count = 0;
+    sharedBuf->queue_size = 0;
+
     /* Initialize semaphores. Initial value is 1 for mutexSem,
        0 for dataAvailableSem (no filled slots initially available)
        and BUFFER_SIZE for roomAvailableSem (all slots are
@@ -113,28 +143,99 @@ int main(int argc, char *args[])
     sem_init(&sharedBuf->dataAvailableSem, 1, 0);
     sem_init(&sharedBuf->roomAvailableSem, 1, BUFFER_SIZE);
 
+    ///////////////////////////////////
+    // Setup TCP Client
+    ///////////////////////////////////
+
+    const char *hostname = "127.0.0.1";
+    int port = 6873;
+    int sd;
+    struct sockaddr_in sin;
+    struct hostent *hp;
+
+    /* Resolve the passed name and store the resulting long representation
+       in the struct hostent variable */
+    if ((hp = gethostbyname(hostname)) == 0)
+    {
+        perror("gethostbyname");
+        exit(1);
+    }
+    /* fill in the socket structure with host information */
+    memset(&sin, 0, sizeof(sin));
+    sin.sin_family = AF_INET;
+    sin.sin_addr.s_addr = ((struct in_addr *)(hp->h_addr_list[0]))->s_addr;
+    sin.sin_port = htons(port);
+    /* create a new socket */
+    if ((sd = socket(AF_INET, SOCK_STREAM, 0)) == -1)
+    {
+        perror("socket");
+        exit(1);
+    }
+    /* connect the socket to the port and host
+       specified in struct sockaddr_in */
+    if (connect(sd, (struct sockaddr *)&sin, sizeof(sin)) == -1)
+    {
+        perror("connect");
+        exit(1);
+    }
+
+
+    ///////////////////////////////////
+    // Run Prod Cons Orchestrator
+    ///////////////////////////////////
+
+    pid_t prod_pid, cons_pid;
+
     /* Launch producer process */
-    pids[0] = fork();
-    if (pids[0] == 0)
+    prod_pid = fork();
+    if (prod_pid == 0)
     {
         /* Child process */
         producer();
         exit(0);
     }
-    /* Launch consumer processes */
-    for (i = 0; i < nConsumers; i++)
+    /* Launch consumer process */
+    cons_pid = fork();
+    if (cons_pid == 0)
     {
-        pids[i + 1] = fork();
-        if (pids[i + 1] == 0)
+        consumer();
+        exit(0);
+    }
+
+    /* Launch orchestrator */
+    while (1) {
+        int cur_read_count;
+        int cur_write_count;
+        int cur_queue_size;
+
+        /* Enter critical section */
+        sem_wait(&sharedBuf->mutexSem);
+
+        cur_read_count = sharedBuf->read_count;
+        cur_write_count = sharedBuf->write_count;
+        cur_queue_size = sharedBuf->queue_size;
+
+        /* Exit critical section */
+        sem_post(&sharedBuf->mutexSem);
+
+        char msg[256];
+        sprintf(msg, "%d:%d:%d%c", cur_read_count, cur_write_count, cur_queue_size, '\n');
+       
+        /* Send the msg */
+        if (send(sd, msg, strlen(msg), 0) == -1)
         {
-            consumer();
-            exit(0);
+            printf("send failed");
+        } else {
+            printf("sent successfully\n");
         }
+
+        PAUSE
     }
-    /* Wait process termination */
-    for (i = 0; i <= nConsumers; i++)
-    {
-        waitpid(pids[i], NULL, 0);
-    }
+
+
+    // /* Wait process termination */
+    // waitpid(prod_pid, NULL, 0);
+    // waitpid(cons_pid, NULL, 0);
+
     return 0;
 }
