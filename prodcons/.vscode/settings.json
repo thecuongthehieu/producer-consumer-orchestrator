@@ -2,6 +2,14 @@
     "files.associations": {
         "unistd.h": "c",
         "semaphore.h": "c",
-        "netdb.h": "c"
+        "netdb.h": "c",
+        "stdlib.h": "c",
+        "ipc.h": "c",
+        "stdio.h": "c",
+        "socket.h": "c",
+        "in.h": "c",
+        "pthread.h": "c",
+        "wait.h": "c",
+        "types.h": "c"
     }
 }
