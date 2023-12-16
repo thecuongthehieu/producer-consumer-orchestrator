@@ -12,6 +12,8 @@
 #include <netdb.h>
 #include <unistd.h>
 
+#include "rate_limiter.c"
+
 #define PAUSE sleep(2);
 
 #define BUFFER_SIZE 256
@@ -24,17 +26,18 @@ sem_t mutexSem;
 sem_t dataAvailableSem;
 sem_t roomAvailableSem;
 
-int read_count;
-int write_count;
+RateLimiter *prod_rate_limiter;
+RateLimiter *cons_rate_limiter;
+RateLimiter *orch_rate_limiter;
+
+int prod_count;
+int cons_count;
 int queue_size;
 
-// Current metrics
-int cur_read_count;
-int cur_write_count;
-int cur_queue_size;
+// TCP socket descriptor
 int sd;
 
-
+/* Setup TCP client to send metrics */
 static int setup_tcp_client() {
     const char *hostname = "127.0.0.1";
     int port = 6873;
@@ -78,6 +81,10 @@ static void *consumer(void *arg)
     {
         /* Wait for availability of at least one data slot */
         sem_wait(&dataAvailableSem);
+
+        /* Limit rate */
+        acquire(cons_rate_limiter);
+
         /* Enter critical section */
         sem_wait(&mutexSem);
         /* Get data item */
@@ -85,7 +92,7 @@ static void *consumer(void *arg)
         /* Update read index */
         readIdx = (readIdx + 1) % BUFFER_SIZE;
 
-        read_count += 1;
+        cons_count += 1;
         queue_size -= 1;
 
         /* Signal that a new empty slot is available */
@@ -94,9 +101,6 @@ static void *consumer(void *arg)
         sem_post(&mutexSem);
         /* Consume data item and take actions (e.g return)*/
         // ...
-
-        PAUSE
-        PAUSE
     }
 }
 
@@ -107,9 +111,13 @@ static void *producer(void *arg)
     while (1)
     {
         /* Produce data item and take actions (e.g. return)*/
-        // ...
+
         /* Wait for availability of at least one empty slot */
         sem_wait(&roomAvailableSem);
+
+        /* Limit rate*/
+        acquire(prod_rate_limiter);
+
         /* Enter critical section */
         sem_wait(&mutexSem);
         /* Write data item */
@@ -117,21 +125,19 @@ static void *producer(void *arg)
         /* Update write index */
         writeIdx = (writeIdx + 1) % BUFFER_SIZE;
 
-        write_count += 1;
+        prod_count += 1;
         queue_size += 1;
 
         /* Signal that a new data slot is available */
         sem_post(&dataAvailableSem);
         /* Exit critical section */
         sem_post(&mutexSem);
-
-        PAUSE
     }
 }
 
-static void send_metrics() {
+static void send_metrics(int cur_prod_count, int cur_cons_count, int cur_queue_size) {
     char msg[256];
-    sprintf(msg, "%d:%d:%d%c", cur_write_count, cur_read_count, cur_queue_size, '\n');
+    sprintf(msg, "%d:%d:%d%c", cur_prod_count, cur_cons_count, cur_queue_size, '\n');
 
     printf("Msg: %s", msg);
     
@@ -144,32 +150,54 @@ static void send_metrics() {
     // }
 } 
 
+/* Orchestrator Code: the passed argument is not used */
 static void *orchestrator(void *args) {
     while (1) {
+        // Current metrics
+        int cur_prod_count;
+        int cur_cons_count;
+        int cur_queue_size;
+
+        /* Limit rate*/
+        acquire(orch_rate_limiter);
+
         /* Enter critical section */
         sem_wait(&mutexSem);
 
-        cur_read_count = read_count;
-        cur_write_count = write_count;
-        cur_queue_size = queue_size;
+        printf("Info: %d:%d:%d \t", prod_count, cons_count, queue_size);
+
+        // cur_cons_count = cons_count;
+        // cur_prod_count = prod_count;
+        // cur_queue_size = queue_size;
+
+        PAUSE
+
+        printf("Info: %d:%d:%d \t", prod_count, cons_count, queue_size);
+
 
         /* Exit critical section */
         sem_post(&mutexSem);
 
         /* Send metrics */
-        send_metrics();
-
-        PAUSE
+        send_metrics(cur_prod_count, cur_cons_count, cur_queue_size);
     }
 }
 
 /* Main program */
 int main(int argc, char *args[])
 {
-    int i;
-    sem_init(&mutexSem, 1, 1);
-    sem_init(&dataAvailableSem, 1, 0);
-    sem_init(&roomAvailableSem, 1, BUFFER_SIZE);
+    // Get args
+    double prod_rate = 2.0;
+    double cons_rate = 1.0;
+    double orch_rate = 1.0;
+
+    sem_init(&mutexSem, 0, 1);
+    sem_init(&dataAvailableSem, 0, 0);
+    sem_init(&roomAvailableSem, 0, BUFFER_SIZE);
+
+    prod_rate_limiter = get_rate_limiter(prod_rate);
+    cons_rate_limiter = get_rate_limiter(cons_rate);
+    orch_rate_limiter = get_rate_limiter(orch_rate);
 
     int sd = 0; // setup_tcp_client();
 
@@ -182,6 +210,7 @@ int main(int argc, char *args[])
     /* Create consumer thread */
     pthread_create(&orch_thread, NULL, orchestrator, NULL);
     
+    /* Wait */
     pthread_join(prod_thread, NULL);
     pthread_join(cons_thread, NULL);
     pthread_join(orch_thread, NULL);

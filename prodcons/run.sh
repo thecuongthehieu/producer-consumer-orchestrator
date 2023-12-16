@@ -3,4 +3,5 @@
 set -e
 
 make
+# ./test
 ./main
