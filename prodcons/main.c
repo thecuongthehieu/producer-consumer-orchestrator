@@ -22,9 +22,9 @@
 int readIdx;
 int writeIdx;
 int buffer[BUFFER_SIZE];
-sem_t mutexSem;
-sem_t dataAvailableSem;
-sem_t roomAvailableSem;
+sem_t *mutex_sem;
+sem_t *data_available_sem;
+sem_t *room_vailable_sem;
 
 RateLimiter *prod_rate_limiter;
 RateLimiter *cons_rate_limiter;
@@ -80,13 +80,13 @@ static void *consumer(void *arg)
     while (1)
     {
         /* Wait for availability of at least one data slot */
-        sem_wait(&dataAvailableSem);
+        sem_wait(data_available_sem);
 
         /* Limit rate */
         acquire(cons_rate_limiter);
 
         /* Enter critical section */
-        sem_wait(&mutexSem);
+        sem_wait(mutex_sem);
         /* Get data item */
         item = buffer[readIdx];
         /* Update read index */
@@ -96,9 +96,9 @@ static void *consumer(void *arg)
         queue_size -= 1;
 
         /* Signal that a new empty slot is available */
-        sem_post(&roomAvailableSem);
+        sem_post(room_vailable_sem);
         /* Exit critical section */
-        sem_post(&mutexSem);
+        sem_post(mutex_sem);
         /* Consume data item and take actions (e.g return)*/
         // ...
     }
@@ -113,13 +113,13 @@ static void *producer(void *arg)
         /* Produce data item and take actions (e.g. return)*/
 
         /* Wait for availability of at least one empty slot */
-        sem_wait(&roomAvailableSem);
+        sem_wait(room_vailable_sem);
 
         /* Limit rate*/
         acquire(prod_rate_limiter);
 
         /* Enter critical section */
-        sem_wait(&mutexSem);
+        sem_wait(mutex_sem);
         /* Write data item */
         buffer[writeIdx] = item;
         /* Update write index */
@@ -129,9 +129,9 @@ static void *producer(void *arg)
         queue_size += 1;
 
         /* Signal that a new data slot is available */
-        sem_post(&dataAvailableSem);
+        sem_post(data_available_sem);
         /* Exit critical section */
-        sem_post(&mutexSem);
+        sem_post(mutex_sem);
     }
 }
 
@@ -162,7 +162,7 @@ static void *orchestrator(void *args) {
         acquire(orch_rate_limiter);
 
         /* Enter critical section */
-        sem_wait(&mutexSem);
+        sem_wait(mutex_sem);
 
         printf("Info: %d:%d:%d \t", prod_count, cons_count, queue_size);
 
@@ -174,9 +174,8 @@ static void *orchestrator(void *args) {
 
         printf("Info: %d:%d:%d \t", prod_count, cons_count, queue_size);
 
-
         /* Exit critical section */
-        sem_post(&mutexSem);
+        sem_post(mutex_sem);
 
         /* Send metrics */
         send_metrics(cur_prod_count, cur_cons_count, cur_queue_size);
@@ -191,9 +190,45 @@ int main(int argc, char *args[])
     double cons_rate = 1.0;
     double orch_rate = 1.0;
 
-    sem_init(&mutexSem, 0, 1);
-    sem_init(&dataAvailableSem, 0, 0);
-    sem_init(&roomAvailableSem, 0, BUFFER_SIZE);
+    printf("Beginning\n");
+
+    // Unlink existed named semaphores before opening new ones with the same name
+    if (sem_unlink("/mutex_sem") == -1) {
+        perror("Failed to unlink /mutux_sem");
+    }
+    printf("Unlinked /mutex_sem\n");
+
+    if (sem_unlink("/data_available_sem") == -1) {
+        perror("Failed to unlink /data_available_sem");
+    }
+    printf("Unlinked /data_available_sem\n");
+
+    if (sem_unlink("/room_vailable_sem") == -1) {
+        perror("Failed to unlink /room_vailable_sem");
+    }
+    printf("Unlinked /room_vailable_sem\n");
+
+    // Use named semaphore
+    mutex_sem = sem_open("/mutex_sem", O_EXCL | O_CREAT, 0644, 1);
+    if (mutex_sem == SEM_FAILED) {
+        perror("Failed to open semphore for mutex_sem");
+        exit(EXIT_FAILURE);
+    }
+    printf("Obtained /mutex_sem\n");
+
+    data_available_sem = sem_open("/data_available_sem", O_EXCL | O_CREAT, 0644, 0);
+    if (data_available_sem == SEM_FAILED) {
+        perror("Failed to open semphore for data_available_sem");
+        exit(EXIT_FAILURE);
+    }
+    printf("Obtained /data_available_sem\n");
+
+    room_vailable_sem = sem_open("/room_vailable_sem", O_EXCL | O_CREAT, 0644, BUFFER_SIZE);
+    if (room_vailable_sem == SEM_FAILED) {
+        perror("Failed to open semphore for room_vailable_sem");
+        exit(EXIT_FAILURE);
+    }
+    printf("Obtained /room_vailable_sem\n");
 
     prod_rate_limiter = get_rate_limiter(prod_rate);
     cons_rate_limiter = get_rate_limiter(cons_rate);
@@ -210,6 +245,8 @@ int main(int argc, char *args[])
     /* Create consumer thread */
     pthread_create(&orch_thread, NULL, orchestrator, NULL);
     
+    printf("Working...\n");
+
     /* Wait */
     pthread_join(prod_thread, NULL);
     pthread_join(cons_thread, NULL);
