@@ -25,24 +25,22 @@ public class BioSocketHandler implements Runnable {
 		try {
 			in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
 			String msg;
-			int tmp_count = 0;
 
-			AtomicLong curReadCount = new AtomicLong(0);
-			AtomicLong curWriteCount = new AtomicLong(0);
+			AtomicLong curProdCount = new AtomicLong(0);
+			AtomicLong curConsCount = new AtomicLong(0);
 			AtomicLong curQueueSize = new AtomicLong(0);
-			MetricExporter.getInstance().getRegistry().gauge("cur_read_count", Tags.of("name", "cuong"), curReadCount, AtomicLong::get);
-			MetricExporter.getInstance().getRegistry().gauge("cur_write_count", Tags.of("name", "cuong"), curWriteCount, AtomicLong::get);
+			MetricExporter.getInstance().getRegistry().gauge("cur_prod_count", Tags.of("name", "cuong"), curProdCount, AtomicLong::get);
+			MetricExporter.getInstance().getRegistry().gauge("cur_cons_count", Tags.of("name", "cuong"), curConsCount, AtomicLong::get);
 			MetricExporter.getInstance().getRegistry().gauge("cur_queue_size", Tags.of("name", "cuong"), curQueueSize, AtomicLong::get);
 
 			while(true) {
 				msg = in.readLine();
 				if (!msg.isEmpty()) {
-					tmp_count += 1;
 					LOGGER.info(msg);
 
 					String[] metrics = msg.split(":");
-					curReadCount.set(Long.valueOf(metrics[0]));
-					curWriteCount.set(Long.valueOf(metrics[1]));
+					curProdCount.set(Long.valueOf(metrics[0]));
+					curConsCount.set(Long.valueOf(metrics[1]));
 					curQueueSize.set(Long.valueOf(metrics[2]));
 
 					MetricExporter.getInstance().getRegistry().counter("tmp_count", "name", "cuong").increment();

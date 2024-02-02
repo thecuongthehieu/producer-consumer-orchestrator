@@ -57,6 +57,8 @@ double get_rate(RateLimiter *rate_limiter) {
     return 1000000.0 / rate_limiter->interval;
 }
 
+// rate = number of permits per second
+// TODO: handle rate = 0
 RateLimiter *get_rate_limiter(double rate) {
     RateLimiter *rate_limiter = (RateLimiter *) malloc(sizeof(RateLimiter));
 

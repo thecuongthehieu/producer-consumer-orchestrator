@@ -13,6 +13,7 @@
         "types.h": "c",
         "time.h": "c",
         "_select.h": "c",
-        "_types.h": "c"
+        "_types.h": "c",
+        "_xlocale.h": "c"
     }
 }
