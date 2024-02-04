@@ -18,7 +18,7 @@
 
 #define BUFFER_SIZE 256
 
-#define QUEUE_THRESHOLD 128
+#define QUEUE_SIZE_THRESHOLD 64
 
 // Queue
 int readIdx;
@@ -145,6 +145,7 @@ static void send_metrics(int cur_prod_count, int cur_cons_count, int cur_queue_s
     char msg[256];
     sprintf(msg, "%d:%d:%d%c", cur_prod_count, cur_cons_count, cur_queue_size, '\n');
 
+    printf("cur_prod_rate= %f \t", get_rate(prod_rate_limiter));
     printf("Msg: %s", msg);
     
     if (mode == 1) {
@@ -156,7 +157,32 @@ static void send_metrics(int cur_prod_count, int cur_cons_count, int cur_queue_s
             printf("Sent metrics successfully\n");
         }
     }
-} 
+}
+
+static void control_flow(int cur_queue_size) {
+    double cur_prod_rate = get_rate(prod_rate_limiter);
+    double updated_prod_rate = cur_prod_rate;
+    if (cur_queue_size > QUEUE_SIZE_THRESHOLD) {
+        // decreasing step = 1.0
+        updated_prod_rate -= 1.0;
+
+        // min rate = 1
+        if (updated_prod_rate < 1.0) {
+            updated_prod_rate = 1.0;
+        }
+    } else {
+        // increasing step = 1.0
+        updated_prod_rate += 1;
+
+        // max rate = 20
+        if (updated_prod_rate > 20.0) {
+            updated_prod_rate = 20.0;
+        }
+    }
+
+    // update rate of producer
+    set_rate(prod_rate_limiter, updated_prod_rate);
+}
 
 /* Orchestrator Code: the passed argument is not used */
 static void *orchestrator(void *args) {
@@ -172,9 +198,6 @@ static void *orchestrator(void *args) {
         /* Enter critical section */
         sem_wait(mutex_sem);
 
-        // TODO : Change the rate 
-        printf("Info: %d:%d:%d \t", prod_count, cons_count, queue_size);
-
         /* Take a snapshot of the metrics */
         cur_cons_count = cons_count;
         cur_prod_count = prod_count;
@@ -185,6 +208,9 @@ static void *orchestrator(void *args) {
 
         /* Send metrics */
         send_metrics(cur_prod_count, cur_cons_count, cur_queue_size);
+
+        // Control flow based on the queue size
+        control_flow(cur_queue_size);
     }
 }
 
