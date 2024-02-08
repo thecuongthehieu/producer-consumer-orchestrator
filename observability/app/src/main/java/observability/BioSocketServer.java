@@ -3,10 +3,7 @@ package observability;
 import org.apache.log4j.Logger;
 
 import java.io.IOException;
-import java.net.InetSocketAddress;
-import java.net.ServerSocket;
-import java.net.Socket;
-import java.net.SocketAddress;
+import java.net.*;
 
 public class BioSocketServer {
 	private static final Logger LOGGER = Logger.getLogger(BioSocketServer.class);
@@ -14,9 +11,9 @@ public class BioSocketServer {
 		ServerSocket serverSocket = null;
 		Socket socket = null;
 		try {
-			//socket address
-			SocketAddress socketAddress = new InetSocketAddress("127.0.0.1", 6873);
-			// Create ServerScoket Server
+			// Socket address
+			SocketAddress socketAddress = new InetSocketAddress(InetAddress.getByName(null), 6873); // loopback address
+			// Create ServerSocket Server
 			serverSocket = new ServerSocket();
 			// Binding address
 			serverSocket.bind(socketAddress);

@@ -39,12 +39,18 @@ int queue_size;
 // TCP socket descriptor
 int sd;
 
-// mode = 1 to send metrics over TCP socket
+// Set mode = 1 to send metrics over TCP socket
 int mode = 0;
+
+// Init rate values
+// rate = number of permits per second
+double prod_rate = 10.0;
+double cons_rate = 10.0;
+double orch_rate = 5.0;
 
 /* Setup TCP client to send metrics */
 static int setup_tcp_client() {
-    const char *hostname = "127.0.0.1";
+    const char *hostname = "localhost";
     int port = 6873;
     struct sockaddr_in sin;
     struct hostent *hp;
@@ -218,10 +224,6 @@ static void *orchestrator(void *args) {
 int main(int argc, char *args[])
 {
     /* Get args */ 
-    // rate = number of permits per second
-    double prod_rate = 10.0;
-    double cons_rate = 10.0;
-    double orch_rate = 5.0;
 
     printf("Beginning\n");
 
