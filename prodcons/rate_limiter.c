@@ -7,7 +7,6 @@
 #define usec_t unsigned long long
 
 typedef struct {
-    // TODO: thread-safe
     pthread_mutex_t mutex;
     double interval;
     usec_t next_free;
@@ -25,6 +24,8 @@ usec_t now() {
 }
 
 usec_t claim_next(RateLimiter *rate_limiter, int permits) {
+    pthread_mutex_lock(&rate_limiter->mutex);
+
     usec_t now_ts = now();
 
     // No burst
@@ -36,6 +37,7 @@ usec_t claim_next(RateLimiter *rate_limiter, int permits) {
  
     rate_limiter->next_free += permits * (usec_t) rate_limiter->interval;
 
+    pthread_mutex_unlock(&rate_limiter->mutex);
     return wait_time;
 }
 
@@ -50,7 +52,11 @@ usec_t acquire(RateLimiter *rate_limiter) {
 }
 
 void set_rate(RateLimiter *rate_limiter, double rate) {
+    pthread_mutex_lock(&rate_limiter->mutex);
+
     rate_limiter->interval = 1000000.0 / rate;
+
+    pthread_mutex_unlock(&rate_limiter->mutex);
 }
 
 double get_rate(RateLimiter *rate_limiter) {

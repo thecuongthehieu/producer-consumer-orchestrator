@@ -3,5 +3,6 @@
 set -e
 
 make
-# ./test
+# ./test_rate_limiter
+# ./test_tcp_utils
 ./main

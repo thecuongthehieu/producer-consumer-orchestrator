@@ -2,7 +2,7 @@
 #include "rate_limiter.c"
 
 #define second 1000000
-#define TOLERANCE 10000 // 10 milisecond (1%)
+#define TOLERANCE 10000 // 10 millisecond (1%)
 
 
 usec_t get_error(usec_t expected, usec_t real) {
@@ -87,7 +87,8 @@ void test_rate_change() {
 
 // Testing 
 int main() {
-    // test_acquire();
-    // test_acquire_permits();
+    test_acquire();
+    test_acquire_permits();
     test_rate_change();
+    // TODO: test thread-safe 
 }

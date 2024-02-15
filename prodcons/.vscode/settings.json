@@ -14,6 +14,7 @@
         "time.h": "c",
         "_select.h": "c",
         "_types.h": "c",
-        "_xlocale.h": "c"
+        "_xlocale.h": "c",
+        "cdefs.h": "c"
     }
 }

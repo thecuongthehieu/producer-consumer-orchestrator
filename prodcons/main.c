@@ -13,12 +13,21 @@
 #include <unistd.h>
 
 #include "rate_limiter.c"
+#include "tcp_utils.c"
 
-#define PAUSE sleep(2);
+// Address and Port of Metric Server
+#define METRIC_SERVER_HOSTNAME "localhost"
+#define METRIC_SERVER_PORT 6873
+
+#define PAUSE sleep(1);
 
 #define BUFFER_SIZE 256
 
-#define QUEUE_SIZE_THRESHOLD 64
+// Set mode = 1 to send metrics to Metric Server over TCP socket
+int mode = 1;
+
+// TCP socket descriptor of Metric Server
+int metric_server_sd;
 
 // Queue
 int readIdx;
@@ -36,54 +45,14 @@ int prod_count;
 int cons_count;
 int queue_size;
 
-// TCP socket descriptor
-int sd;
-
-// Set mode = 1 to send metrics over TCP socket
-int mode = 0;
-
 // Init rate values
 // rate = number of permits per second
-double prod_rate = 10.0;
-double cons_rate = 10.0;
-double orch_rate = 5.0;
+double initial_prod_rate = 10.0;
+double initial_cons_rate = 10.0;
+double initial_orch_rate = 10.0;
+int queue_size_threshold = 64;
 
-/* Setup TCP client to send metrics */
-static int setup_tcp_client() {
-    const char *hostname = "localhost";
-    int port = 6873;
-    struct sockaddr_in sin;
-    struct hostent *hp;
-
-    /* Resolve the passed name and store the resulting long representation in the struct hostent variable */
-    if ((hp = gethostbyname(hostname)) == 0)
-    {
-        perror("gethostbyname");
-        exit(1);
-    }
-
-    /* Fill in the socket structure with host information */
-    memset(&sin, 0, sizeof(sin));
-    sin.sin_family = AF_INET;
-    sin.sin_addr.s_addr = ((struct in_addr *)(hp->h_addr_list[0]))->s_addr;
-    sin.sin_port = htons(port);
-
-    /* Create a new socket */
-    if ((sd = socket(AF_INET, SOCK_STREAM, 0)) == -1)
-    {
-        perror("socket");
-        exit(1);
-    }
-
-    /* Connect the socket to the port and host specified in struct sockaddr_in */
-    if (connect(sd, (struct sockaddr *)&sin, sizeof(sin)) == -1)
-    {
-        perror("connect");
-        exit(1);
-    }
-
-    return sd;
-}
+double rate_change_step = 0.5;
 
 /* Consumer Code: the passed argument is not used */
 static void *consumer(void *arg)
@@ -99,16 +68,19 @@ static void *consumer(void *arg)
 
         /* Enter critical section */
         sem_wait(mutex_sem);
+
         /* Get data item */
         item = buffer[readIdx];
         /* Update read index */
         readIdx = (readIdx + 1) % BUFFER_SIZE;
 
+        /* Update metrics */
         cons_count += 1;
         queue_size -= 1;
 
         /* Signal that a new empty slot is available */
         sem_post(room_vailable_sem);
+
         /* Exit critical section */
         sem_post(mutex_sem);
         
@@ -125,21 +97,24 @@ static void *producer(void *arg)
         /* Wait for availability of at least one empty slot */
         sem_wait(room_vailable_sem);
 
-        /* Limit rate*/
+        /* Limit rate */
         acquire(prod_rate_limiter);
 
         /* Enter critical section */
         sem_wait(mutex_sem);
+
         /* Write data item */
         buffer[writeIdx] = item;
         /* Update write index */
         writeIdx = (writeIdx + 1) % BUFFER_SIZE;
 
+        /* Update metrics */
         prod_count += 1;
         queue_size += 1;
 
         /* Signal that a new data slot is available */
         sem_post(data_available_sem);
+        
         /* Exit critical section */
         sem_post(mutex_sem);
 
@@ -149,40 +124,41 @@ static void *producer(void *arg)
 
 static void send_metrics(int cur_prod_count, int cur_cons_count, int cur_queue_size) {
     char msg[256];
-    sprintf(msg, "%d:%d:%d%c", cur_prod_count, cur_cons_count, cur_queue_size, '\n');
 
-    printf("cur_prod_rate= %f \t", get_rate(prod_rate_limiter));
-    printf("Msg: %s", msg);
+    int cur_prod_rate = (int) get_rate(prod_rate_limiter);
+    sprintf(msg, "%d:%d:%d:%d:%d%c", cur_prod_rate, cur_prod_count, cur_cons_count, cur_queue_size, queue_size_threshold, '\n');
+    
+    // For debugging
+    // printf("Msg: %s", msg);
     
     if (mode == 1) {
         /* Send the msg */
-        if (send(sd, msg, strlen(msg), 0) == -1)
+        if (send(metric_server_sd, msg, strlen(msg), 0) == -1)
         {
-            printf("Send metrics failed");
-        } else {
-            printf("Sent metrics successfully\n");
+            printf("ERROR: Send metrics failed");
         }
     }
 }
 
 static void control_flow(int cur_queue_size) {
     double cur_prod_rate = get_rate(prod_rate_limiter);
+    double cur_cons_rate = get_rate(cons_rate_limiter);
     double updated_prod_rate = cur_prod_rate;
-    if (cur_queue_size > QUEUE_SIZE_THRESHOLD) {
-        // decreasing step = 1.0
-        updated_prod_rate -= 1.0;
+    if (cur_queue_size > queue_size_threshold) {
+        // decreasing
+        updated_prod_rate -= rate_change_step;
 
-        // min rate = 1
-        if (updated_prod_rate < 1.0) {
-            updated_prod_rate = 1.0;
+        // min rate = cur_cons_rate / 2
+        if (updated_prod_rate < cur_cons_rate / 2) {
+            updated_prod_rate = cur_cons_rate / 2;
         }
     } else {
-        // increasing step = 1.0
-        updated_prod_rate += 1;
+        // increasing
+        updated_prod_rate += rate_change_step;
 
-        // max rate = 20
-        if (updated_prod_rate > 20.0) {
-            updated_prod_rate = 20.0;
+        // max rate = 2 * cons_rate
+        if (updated_prod_rate > cur_cons_rate * 2) {
+            updated_prod_rate = cur_cons_rate * 2;
         }
     }
 
@@ -198,7 +174,7 @@ static void *orchestrator(void *args) {
         int cur_cons_count;
         int cur_queue_size;
 
-        /* Limit rate*/
+        /* Limit rate */
         acquire(orch_rate_limiter);
 
         /* Enter critical section */
@@ -220,10 +196,69 @@ static void *orchestrator(void *args) {
     }
 }
 
+/* Handle TCP connection to update metrics */
+static void handle_metric_update_request(int conn_sd) {
+    int max_msg_len = 256;
+    char *client_msg, *server_msg;
+
+    server_msg = strdup("Message Format = new_cons_rate:new_orch_rate:new_queue_size_threshold (Use '_' to keep the current values)\n");
+    /* Send the format of update message */
+    if (send(conn_sd, server_msg, strlen(server_msg), 0) == -1) {
+        return;
+    }
+    free(server_msg);
+
+    for (;;)
+    {
+        client_msg = malloc(max_msg_len);
+        
+        /* Get the command and write terminator */
+        if (receive(conn_sd, client_msg, max_msg_len) != -1) {
+
+            /* Extract metrics values */
+            char *token = strtok(client_msg, ":");
+            if (strcmp(token, "_") != 0) {
+                double new_cons_rate = (double) atoi(token);
+                // printf("new_cons_rate=%f\n", new_cons_rate);
+                set_rate(cons_rate_limiter, new_cons_rate);
+            }
+
+            token = strtok(NULL, ":");
+            if (strcmp(token, "_") != 0) {
+                double new_orch_rate = (double) atoi(token);
+                // printf("new_orch_rate=%f\n", new_orch_rate);
+                set_rate(orch_rate_limiter, new_orch_rate);
+            }
+
+            token = strtok(NULL, ":");
+            if (strcmp(token, "_") != 0) {
+                int new_queue_size_threshold = atoi(token);
+                // printf("new_queue_size_threshold=%d\n", new_queue_size_threshold);
+                queue_size_threshold = new_queue_size_threshold;
+            }            
+
+            /* get the answer character string */
+            server_msg = strdup("Metrics Updated\n");
+
+            /* Send answer characters */
+            if (send(conn_sd, server_msg, strlen(server_msg), 0) == -1) {
+                break;
+            }
+
+            free(client_msg);
+            free(server_msg);
+        } else {
+            break;
+        }
+    }
+    close(conn_sd);
+}
+
 /* Main program */
 int main(int argc, char *args[])
 {
-    /* Get args */ 
+    /* Get args */
+    // TODO
 
     printf("Beginning\n");
 
@@ -266,28 +301,30 @@ int main(int argc, char *args[])
     printf("Obtained /room_vailable_sem\n");
 
     /* Init rate limiters */
-    prod_rate_limiter = get_rate_limiter(prod_rate);
-    cons_rate_limiter = get_rate_limiter(cons_rate);
-    orch_rate_limiter = get_rate_limiter(orch_rate);
+    prod_rate_limiter = get_rate_limiter(initial_prod_rate);
+    cons_rate_limiter = get_rate_limiter(initial_cons_rate);
+    orch_rate_limiter = get_rate_limiter(initial_orch_rate);
 
     /* Init TCP client */
-    sd = 0;
+    metric_server_sd = 0;
     if (mode == 1) {
-        sd = setup_tcp_client();
+        metric_server_sd = setup_tcp_client(METRIC_SERVER_HOSTNAME, METRIC_SERVER_PORT);
     }
 
-    pthread_t prod_thread, cons_thread, orch_thread; 
+    /* Start TCP server in a separated thread */
+    pthread_t tcp_server_thread;
+    pthread_create(&tcp_server_thread, NULL, start_tcp_server, &handle_metric_update_request);
 
-    /* Create producer thread */
+    /* Create producer, consumer, orchestrator threads */
+    pthread_t prod_thread, cons_thread, orch_thread; 
     pthread_create(&prod_thread, NULL, producer, NULL);
-    /* Create consumer thread */
     pthread_create(&cons_thread, NULL, consumer, NULL);
-    /* Create consumer thread */
     pthread_create(&orch_thread, NULL, orchestrator, NULL);
     
     printf("Operating...\n");
 
     /* Wait */
+    pthread_join(tcp_server_thread, NULL);
     pthread_join(prod_thread, NULL);
     pthread_join(cons_thread, NULL);
     pthread_join(orch_thread, NULL);
