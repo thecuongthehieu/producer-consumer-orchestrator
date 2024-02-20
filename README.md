@@ -15,9 +15,9 @@ Software
 
 Usage
 --------- 
-1. `/producer-consumer-orchestrator/prodcons$ prometheus --config.file=./prometheus/prometheus.yml`
-2. `/producer-consumer-orchestrator/observability$ ./gradlew app:run`
-3. `/producer-consumer-orchestrator/prodcons$ ./run.sh`
+- `/producer-consumer-orchestrator/prodcons$ prometheus --config.file=./prometheus/prometheus.yml`
+- `/producer-consumer-orchestrator/observability$ ./gradlew app:run`
+- `/producer-consumer-orchestrator/prodcons$ ./run.sh`
 
 System Design
 ---------
