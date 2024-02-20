@@ -6,7 +6,7 @@ Problem
 
 Software
 ---------
-- C programing
+- C Programing
 - Java Programming
 - Makefile
 - Gradle
